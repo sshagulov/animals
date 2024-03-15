@@ -19,7 +19,7 @@
 
 int keepRunning = 1;
 
-void int_handler(int) {
+void int_handler(int arg) {
     keepRunning = 0;
 }
 
@@ -54,13 +54,13 @@ int main(int argc, char* argv[]) {
     for (p = servinfo; p != NULL; p = p->ai_next) {
         sockFd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (sockFd == -1) {
-            perror("Неудачная попытка создать сокет");
+            perror("Неудачная попытка создать сокет\n");
             continue;
         }
         result = connect(sockFd, p->ai_addr, p->ai_addrlen);
         if (result == -1) {
             close(sockFd);
-            perror("Неудачная попытка подключения");
+            perror("Неудачная попытка подключения\n");
             continue;
         }
         break;
@@ -87,45 +87,36 @@ int main(int argc, char* argv[]) {
     char* table = malloc(tableSize);
 
     struct pollfd pfds[2];
-    pfds[0].fd = 0;
+    pfds[0].fd = 0; // stdin
     pfds[0].events = POLLIN;
-    pfds[1].fd = sockFd;
-    pfds[1].events = POLLIN;
     
     while (keepRunning) {
 
         poll(pfds, 2, -1);
 
         if (pfds[0].revents & POLLIN) {
+
             printf(
                 "\033[1mДоступные команды:\033[0m\n"
                 "• spawn <тип животного> <количество животных>\n"
                 "• spawnall <количество животных>\n"
                 "• meteor\n> "
             );
-            char str[100];
-            getchar();
-            if (fgets(str, sizeof(str), stdin) != NULL) {
-                str[strlen(str) - 1] = '\0'; // убираем \n с конца
-                send(sockFd, &str, 100, 0);
-            }
-            else {
-                fprintf(stderr, "Ошибка при считывании строки\n");
+            char cmd[100];
+            fgets(cmd, sizeof(cmd), stdin);
+            if (fgets(cmd, sizeof(cmd), stdin) != NULL && strlen(cmd) > 1) {
+                cmd[strlen(cmd) - 1] = '\0'; // убираем \n с конца
+                send(sockFd, &cmd, sizeof(cmd), 0);
             }
         }
 
-        int ret;
-        if (ret = recv(sockFd, table, tableSize + 1, 0)) {
+        if (recv(sockFd, table, tableSize + 1, 0)) {
             printf("%s", table);
         }
     }
 
-    char str[5] = "close";
-    if (keepRunning == 0) {
-        printf("Соединение было закрыто\n");
-        send(sockFd, &str, 5, 0);
-    }
-
+    printf("\nСоединение было закрыто\n");
+    send(sockFd, "close", 5, 0);
     close(sockFd);
     return 0;
 }

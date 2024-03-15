@@ -21,12 +21,12 @@
 #define MAP_SIZE 30
 #define MAX_SATIETY 40
 #define MAX_AGE 60
-// #define SAME_ORIGINALS_NUM 0
-#define SAME_ORIGINALS_NUM MAP_SIZE
+#define SAME_ORIGINALS_NUM 0
+// #define SAME_ORIGINALS_NUM MAP_SIZE
 #define SPEED_MAP 100000
 
 #define MAX_CLIENTS 10
-#define PORT "3490"
+#define PORT "3490" // для TCP
 #define BACKLOG 10
 
 typedef struct {
@@ -165,7 +165,7 @@ void print_generation() {
     printf("\n\nИстория популяций:\n");
     for (int i = 0; i < generations_cnt; i++) {
         printf(
-            "%*d поколение: %*d 🐱, %*d 🐭, %*d 🦁\n",
+            "%*d поколение: %*d 🐱, %*d 🐭, %*d 🦊\n",
             2, i, 3, generation[0][i], 3, generation[1][i], 3, generation[2][i]
         );
     }
@@ -396,7 +396,7 @@ void* listen_client(void* arg) {
     }
 }
 
-void* add_clients(void*) {
+void* add_clients(void* arg) {
     printf("Жду подключения...\n");
     while (1) {
         int result = poll(pfds, 2, -1);
@@ -458,28 +458,32 @@ int main() {
         generation[i] = (int*)malloc(sizeof(int));
     }
 
+    // параметры создания сокета
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;
+    hints.ai_family = AF_UNSPEC;     // для любого семейства адресов
+    hints.ai_socktype = SOCK_STREAM; // -> TCP, SOCK_DGRAM -> UDP
+    hints.ai_flags = AI_PASSIVE;     // bind()
 
+    // получаем список адресов, которые могут использоваться для привязки сокета
     getaddrinfo(NULL, PORT, &hints, &res);
 
     servSockFd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     int yes = 1;
 
-    // предотвращаем ошибку при повторной привязке сокета к локальному адресу
+    // позволяем повторно использовать адрес и порт, на котором уже работает другой сокет
     if (setsockopt(servSockFd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) == -1) {
         perror("setsockopt");
         exit(1);
     }
 
+    // присваиваем адрес сокету
     int result = bind(servSockFd, res->ai_addr, res->ai_addrlen);
     if (result == -1) {
         perror("Failed to bind");
         return 1;
     }
 
+    // готовы принимать входящие соединения и задать размер очереди
     listen(servSockFd, BACKLOG);
 
     pfds[0].fd = 0;
