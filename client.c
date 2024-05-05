@@ -1,18 +1,17 @@
 #define _POSIX_C_SOURCE 200112L
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <signal.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
+#include <arpa/inet.h>  // inet_
+#include <errno.h>      // errno
+#include <netdb.h>      // addrinfo, getaddrinfo
+#include <netinet/in.h> // sockaddr_in
+#include <poll.h>       // poll
+#include <signal.h>     // signal
+#include <stdio.h>      // fprintfm printf fgets
+#include <stdlib.h>     // exit, rand
+#include <string.h>     // memset
+#include <sys/socket.h> // sockaddr
+#include <sys/types.h>  // 
+#include <unistd.h>     // close
 
 #define ADDR "127.0.0.1"
 #define PORT "3490"
@@ -32,7 +31,8 @@ void* get_in_addr(struct sockaddr* sa) {
 int main(int argc, char* argv[]) {
 
     signal(SIGINT, int_handler);
-
+    setbuf(stdout, NULL);
+    
     int sockFd;
     struct addrinfo hints;
     struct addrinfo* servinfo;
@@ -54,13 +54,13 @@ int main(int argc, char* argv[]) {
     for (p = servinfo; p != NULL; p = p->ai_next) {
         sockFd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (sockFd == -1) {
-            perror("Неудачная попытка создать сокет\n");
+            perror("Неудачная попытка создать сокет");
             continue;
         }
         result = connect(sockFd, p->ai_addr, p->ai_addrlen);
         if (result == -1) {
             close(sockFd);
-            perror("Неудачная попытка подключения\n");
+            perror("Неудачная попытка подключения");
             continue;
         }
         break;
@@ -77,17 +77,17 @@ int main(int argc, char* argv[]) {
 
     freeaddrinfo(servinfo);
 
-    int tableSize;
-    result = recv(sockFd, &tableSize, 4, 0);
+    int strSize;
+    result = recv(sockFd, &strSize, 4, 0);
     if (result == -1)
-        perror("Не удалось получить размер таблицы");
+        perror("Не удалось получить размер строки");
 
-    printf("Получил размер таблицы: %d\n", tableSize);
+    printf("Получил размер строки: %d\n", strSize);
 
-    char* table = malloc(tableSize);
+    char* str = malloc(strSize);
 
     struct pollfd pfds[2];
-    pfds[0].fd = 0; // stdin
+    pfds[0].fd = 0;
     pfds[0].events = POLLIN;
     
     while (keepRunning) {
@@ -95,7 +95,6 @@ int main(int argc, char* argv[]) {
         poll(pfds, 2, -1);
 
         if (pfds[0].revents & POLLIN) {
-
             printf(
                 "\033[1mДоступные команды:\033[0m\n"
                 "• spawn <тип животного> <количество животных>\n"
@@ -103,16 +102,18 @@ int main(int argc, char* argv[]) {
                 "• meteor\n> "
             );
             char cmd[100];
-            fgets(cmd, sizeof(cmd), stdin);
+            getchar();
             if (fgets(cmd, sizeof(cmd), stdin) != NULL && strlen(cmd) > 1) {
                 cmd[strlen(cmd) - 1] = '\0'; // убираем \n с конца
-                send(sockFd, &cmd, sizeof(cmd), 0);
+                send(sockFd, &cmd, 100, 0);
+            }
+            else {
+                fprintf(stderr, "Ошибка при считывании строки\n");
             }
         }
 
-        if (recv(sockFd, table, tableSize + 1, 0)) {
-            printf("%s", table);
-        }
+        if (recv(sockFd, str, strSize + 1, 0))
+            printf("%s", str);
     }
 
     printf("\nСоединение было закрыто\n");

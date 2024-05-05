@@ -21,8 +21,8 @@
 #define MAP_SIZE 30
 #define MAX_SATIETY 40
 #define MAX_AGE 60
-#define SAME_ORIGINALS_NUM 0
-// #define SAME_ORIGINALS_NUM MAP_SIZE
+// #define SAME_ORIGINALS_NUM 0
+#define SAME_ORIGINALS_NUM MAP_SIZE
 #define SPEED_MAP 100000
 
 #define MAX_CLIENTS 10
@@ -107,7 +107,6 @@ int wait = 1;
 char clientAddr[INET_ADDRSTRLEN];
 int clients[MAX_CLIENTS];
 int client_cnt;
-struct pollfd pfds[2];
 struct sockaddr_storage theirAddr;
 socklen_t addrSize;
 struct addrinfo hints;
@@ -117,10 +116,15 @@ int servSockFd;
 void build_map();
 void seed_map();
 void print_generation();
-void create_animal(int type);
-void create_child(int type, int x, int y, int satiety);
-void kill_animal(Animal* animal);
-void* animal_thread(void* arg);
+void create_animal(int);
+void create_child(int, int, int, int);
+void kill_animal(Animal*);
+void* animal_thread(void*);
+void intHandler(int);
+void* get_in_addr(struct sockaddr*);
+void* listen_client(void*);
+void* add_clients(void*);
+void send_map();
 
 void build_map() {
     pthread_mutex_lock(&mtx_build_map);
@@ -148,7 +152,7 @@ void build_map() {
         originals_created_cnt, children_created_cnt, deads_cnt
     );
 
-    asprintf(&map_str, "%s\033[3mНажмите ENTER, чтобы ввести команду\033[0m\n", map_str);
+    asprintf(&map_str, "%s\033[3mНажмите ENTER, чтобы ввести команду\033[0m", map_str);
 
     //printf("%s\n", map_str);
     pthread_mutex_unlock(&mtx_build_map);
@@ -159,6 +163,11 @@ void build_map() {
         generation[i][generations_cnt] = animals_num[i];
     }
     generations_cnt++;
+}
+
+void seed_map(int type, int num) {
+    for (int i = 0; i < num; i++)
+        create_animal(type);
 }
 
 void print_generation() {
@@ -172,32 +181,27 @@ void print_generation() {
     printf("\n");
 }
 
-void seed_map(int type, int num) {
-    for (int i = 0; i < num; i++)
-        create_animal(type);
-}
-
 void create_animal(int type) {
-
     int x, y;
-
-    while(1) {
+    while (1) {
         x = rand() % MAP_SIZE;
         y = rand() % MAP_SIZE;
         if (grid[x][y] == NULL) break;
     }
+
     Animal* animal = (Animal*)malloc(sizeof(Animal));
     animal->type = type;
     animal->age = 0;
     animal->satiety = MAX_SATIETY;
     animal->x = x;
     animal->y = y;
+
     pthread_mutex_lock(&a);
     animals_num[type]++;
     originals_created_cnt++;
     grid[animal->x][animal->y] = animal;
     pthread_mutex_unlock(&a);
-    
+
     pthread_create(&animal->thread, NULL, animal_thread, animal);
 }
 
@@ -303,7 +307,7 @@ void* animal_thread (void* arg) {
     }
 }
 
-void intHandler(int) {
+void intHandler(int arg) {
     keepRunning = 0;
 }
 
@@ -314,7 +318,7 @@ void* get_in_addr(struct sockaddr* sa) {
 }
 
 void* listen_client(void* arg) {
-
+    pthread_detach(pthread_self());
     int client_fd = *((int*)arg);
 
     while (1) {
@@ -322,89 +326,81 @@ void* listen_client(void* arg) {
         memset(str, 0, 100);
 
         int resp = recv(client_fd, str, 100, 0);
-        if (resp != -1) {
+        if (resp == -1) continue;
 
-            printf("\nПолучил \"%s\"\n", str);
+        printf("\nПолучил \"%s\"\n", str);
 
-            if (strncmp(str, "close", 5) == 0) {
-                pthread_mutex_lock(&mtx_listen_client);
-                for (int i = 0; i < client_cnt; i++){
-                    if (client_fd == clients[i]) {
-                        printf("client %d left\n", i);
-                        for(int j = i + 1; j < client_cnt; j++)
-                            clients[i++] = clients[j];
-                        break;
-                    }
-                }
-                client_cnt--;
-                pthread_mutex_unlock(&mtx_listen_client);
-                close(client_fd);
-                pthread_exit(NULL);
-            }
-
-            if (strncmp(str, "spawn ", 6) == 0) {
-                int type = atoi(&str[6]);
-                int num = atoi(&str[8]);
-                if (empty_cells_cnt > num){
-                    printf("Создалось %d животных %d-го типа\n", num, type);
-                    pthread_mutex_lock(&mtx_listen_client);
-                    seed_map(type, num);
-                    pthread_mutex_unlock(&mtx_listen_client);
+        if (strncmp(str, "close", 5) == 0) {
+            pthread_mutex_lock(&mtx_listen_client);
+            for (int i = 0; i < client_cnt; i++){
+                if (client_fd == clients[i]) {
+                    printf("client %d left\n", i);
+                    for(int j = i + 1; j < client_cnt; j++)
+                        clients[i++] = clients[j];
+                    break;
                 }
             }
-
-            if (strncmp(str, "spawnall", 8) == 0) {
-                int num = atoi(&str[9]);
-                if (empty_cells_cnt > 3 * num) {
-                    printf("Создалось %d животных всех типов\n", num);
-                    pthread_mutex_lock(&mtx_listen_client);
-                    seed_map(0, num);
-                    seed_map(1, num);
-                    seed_map(2, num);
-                    pthread_mutex_unlock(&mtx_listen_client);
-                }
-            }
-
-            if (strncmp(str, "meteor", 6) == 0) {
-                int x = rand() % (MAP_SIZE - 8) + 4;
-                int y = rand() % (MAP_SIZE - 8) + 4;
-                printf("Упал метеор x: %d y: %d\n", x, y);
-                
-                int sign1 = 1, sign2 = 1;
-                terra[x][y] = 2;
-                for (int x_move = 0; x_move < 2; x_move++) {
-                    for (int y_move = 0; y_move < 2; y_move++) {
-                        for (int i = 0; i < 12; i++) {
-                            int new_x = x + meteor[i][0] * sign1;
-                            int new_y = y + meteor[i][1] * sign2;
-
-                            terra[new_x][new_y] = (i >= 7) ? 3 : 2;
-
-                            if (grid[new_x][new_y] != NULL) {
-                                grid[new_x][new_y]->age = MAX_AGE;
-                            }
-                        }
-                        sign1 = -1;
-                    }
-                    sign1 = 1;
-                    sign2 = -1;
-                }
-            }
-            
+            client_cnt--;
+            pthread_mutex_unlock(&mtx_listen_client);
+            close(client_fd);
+            pthread_exit(NULL);
         }
 
+        if (strncmp(str, "spawn ", 6) == 0) {
+            int type = atoi(&str[6]);
+            int num = atoi(&str[8]);
+            if (empty_cells_cnt > num){
+                printf("Создалось %d животных %d-го типа\n", num, type);
+                pthread_mutex_lock(&mtx_listen_client);
+                seed_map(type, num);
+                pthread_mutex_unlock(&mtx_listen_client);
+            }
+        }
+
+        if (strncmp(str, "spawnall", 8) == 0) {
+            int num = atoi(&str[9]);
+            if (empty_cells_cnt > 3 * num) {
+                printf("Создалось %d животных всех типов\n", num);
+                pthread_mutex_lock(&mtx_listen_client);
+                seed_map(0, num);
+                seed_map(1, num);
+                seed_map(2, num);
+                pthread_mutex_unlock(&mtx_listen_client);
+            }
+        }
+
+        if (strncmp(str, "meteor", 6) == 0) {
+            int x = rand() % (MAP_SIZE - 8) + 4;
+            int y = rand() % (MAP_SIZE - 8) + 4;
+            printf("Упал метеор x: %d y: %d\n", x, y);
+            
+            int sign1 = 1, sign2 = 1;
+            terra[x][y] = 2;
+            for (int x_move = 0; x_move < 2; x_move++) {
+                for (int y_move = 0; y_move < 2; y_move++) {
+                    for (int i = 0; i < 12; i++) {
+                        int new_x = x + meteor[i][0] * sign1;
+                        int new_y = y + meteor[i][1] * sign2;
+
+                        terra[new_x][new_y] = (i >= 7) ? 3 : 2;
+
+                        if (grid[new_x][new_y] != NULL) {
+                            grid[new_x][new_y]->age = MAX_AGE;
+                        }
+                    }
+                    sign1 = -1;
+                }
+                sign1 = 1;
+                sign2 = -1;
+            }
+        }
     }
 }
 
 void* add_clients(void* arg) {
+    // pthread_detach(pthread_self());
     printf("Жду подключения...\n");
     while (1) {
-        int result = poll(pfds, 2, -1);
-        if (result == -1) {
-            perror("Ошибка опроса");
-            break;
-        }
-
         // если получено событие и это не консольный ввод,
         // то принимаем входящее соединение
         addrSize = sizeof(theirAddr);
@@ -440,16 +436,8 @@ void send_map() {
     pthread_mutex_unlock(&mtx_build_map);
 }
 
-void cancel_clients() {
-    char data[6] = "cancel";
-    for (int i = 0; i < client_cnt; i++) {
-       send(clients[i], &data, 6, 0);
-    }
-}
-
 int main() {
 
-    setbuf(stdout, NULL);
     srand(clock());
     signal(SIGINT, intHandler);
 
@@ -458,38 +446,29 @@ int main() {
         generation[i] = (int*)malloc(sizeof(int));
     }
 
-    // параметры создания сокета
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;     // для любого семейства адресов
-    hints.ai_socktype = SOCK_STREAM; // -> TCP, SOCK_DGRAM -> UDP
-    hints.ai_flags = AI_PASSIVE;     // bind()
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
 
-    // получаем список адресов, которые могут использоваться для привязки сокета
     getaddrinfo(NULL, PORT, &hints, &res);
 
     servSockFd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     int yes = 1;
 
-    // позволяем повторно использовать адрес и порт, на котором уже работает другой сокет
+    // предотвращаем ошибку при повторной привязке сокета к локальному адресу
     if (setsockopt(servSockFd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) == -1) {
         perror("setsockopt");
         exit(1);
     }
 
-    // присваиваем адрес сокету
     int result = bind(servSockFd, res->ai_addr, res->ai_addrlen);
     if (result == -1) {
         perror("Failed to bind");
         return 1;
     }
 
-    // готовы принимать входящие соединения и задать размер очереди
     listen(servSockFd, BACKLOG);
-
-    pfds[0].fd = 0;
-    pfds[0].events = POLLIN;
-    pfds[1].fd = servSockFd;
-    pfds[1].events = POLLIN;
 
     seed_map(0, SAME_ORIGINALS_NUM);
     seed_map(1, SAME_ORIGINALS_NUM);
@@ -504,8 +483,6 @@ int main() {
         send_map();
         usleep(SPEED_MAP);
     }
-
-    cancel_clients();
 
     pthread_mutex_destroy(&a);
     pthread_mutex_destroy(&b);
